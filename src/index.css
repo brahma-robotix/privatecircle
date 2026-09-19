@@ -1,0 +1,100 @@
+/* PrivateCircle AMOLED Dark Theme & System Design */
+:root {
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* AMOLED Deep Obsidian Palette */
+  --bg-app: #08080a;              /* Pure obsidian dark */
+  --bg-dock: #0c0d12;             /* Sidebar navigation dock */
+  --bg-surface: #121319;          /* Card and container surface */
+  --bg-surface-elevated: #1a1b24; /* Hover, popup and modal background */
+  --bg-input: #0e0f15;            /* Form input background */
+
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-glow: rgba(99, 102, 241, 0.25);
+
+  --text-primary: #f8fafc;        /* High-contrast crisp white */
+  --text-secondary: #94a3b8;      /* Secondary silver/slate */
+  --text-muted: #64748b;          /* Muted meta text */
+
+  /* Romantic & Brand Accents */
+  --primary: #6366f1;             /* Indigo */
+  --primary-hover: #4f46e5;
+  --primary-light: #e0e7ff;
+  --romantic-rose: #ec4899;       /* Pink heart / couple accent */
+  --romantic-glow: rgba(236, 72, 153, 0.2);
+
+  --bubble-mine: #4f46e5;
+  --bubble-theirs: #1a1b24;
+
+  --success: #10b981;             /* Emerald */
+  --warning: #f59e0b;             /* Amber */
+  --danger: #ef4444;              /* Red */
+
+  /* Layout Constants */
+  --header-height: 64px;
+  --dock-width: 80px;
+  --sidebar-width: 320px;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  user-select: text;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Custom Sleek Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
