@@ -87,10 +87,10 @@ export const AdminService = {
       return { invitation: null, error: 'Email is required' };
     }
 
-    // Generate readable, secure code: PRIV-XXXX-EML
-    const randPart = Math.floor(1000 + Math.random() * 9000);
-    const emailPrefix = cleanEmail.split('@')[0].slice(0, 3).toUpperCase() || 'USR';
-    const code = `PRIV-${randPart}-${emailPrefix}`;
+    // Use cryptographically secure randomness for invitation codes.
+    const randomBytes = new Uint8Array(16);
+    crypto.getRandomValues(randomBytes);
+    const code = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
 
     const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString();
 
@@ -193,10 +193,21 @@ export const AdminService = {
     }
 
     try {
-      const { error } = await supabase
+      const { data: profile, error: fetchError } = await supabase
         .from('profiles')
-        .update({ status: newStatus })
-        .eq('id', userId);
+        .select('role')
+        .eq('id', userId)
+        .single();
+
+      if (fetchError || !profile) {
+        return { success: false, error: fetchError?.message || 'Profile not found' };
+      }
+
+      const { error } = await supabase.rpc('admin_update_profile_access', {
+        target_user_id: userId,
+        new_role: profile.role,
+        new_status: newStatus,
+      });
 
       if (error) {
         return { success: false, error: error.message };
@@ -221,10 +232,21 @@ export const AdminService = {
     }
 
     try {
-      const { error } = await supabase
+      const { data: profile, error: fetchError } = await supabase
         .from('profiles')
-        .update({ role: newRole })
-        .eq('id', userId);
+        .select('status')
+        .eq('id', userId)
+        .single();
+
+      if (fetchError || !profile) {
+        return { success: false, error: fetchError?.message || 'Profile not found' };
+      }
+
+      const { error } = await supabase.rpc('admin_update_profile_access', {
+        target_user_id: userId,
+        new_role: newRole,
+        new_status: profile.status,
+      });
 
       if (error) {
         return { success: false, error: error.message };
