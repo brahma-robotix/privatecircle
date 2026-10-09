@@ -140,25 +140,21 @@ export const AuthService = {
         return { user: null, session: null, error: formatAuthError(error) };
       }
 
-      if (data.user) {
-        // The database auth trigger consumes the invitation atomically.
-
-        // Fetch or create profile
+      if (data.user && data.session) {
+        // The database auth trigger consumes the invitation and creates the profile atomically.
         const profile = await this.fetchProfile(data.user.id);
-        const mappedUser = profile
-          ? mapProfileToUser(profile)
-          : {
-              id: data.user.id,
-              email: data.user.email || email,
-              name: name.trim() || 'Circle Member',
-              role: 'member' as UserRole,
-              status: 'active' as const,
-              avatarBg: '#6366f1',
-            };
-
-        return { user: mappedUser, session: data.session, error: null };
+        if (!profile || profile.status !== 'active') {
+          await supabase.auth.signOut();
+          return {
+            user: null,
+            session: null,
+            error: 'PrivateCircle could not verify the new account profile. Contact the administrator.',
+          };
+        }
+        return { user: mapProfileToUser(profile), session: data.session, error: null };
       }
 
+      // Email confirmation may be required before a session/profile can be fetched.
       return { user: null, session: null, error: null };
     } catch (err: any) {
       return { user: null, session: null, error: formatAuthError(err) };
