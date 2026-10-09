@@ -381,10 +381,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (isMounted) clearSupabaseUserState();
             return;
           }
-          clearSupabaseUserState();
+          if (event === 'SIGNED_IN') clearSupabaseUserState();
           setSupabaseUser(mapProfileToUser(profile));
           setAuthMode('supabase');
-          void refreshCircleDirectory();
+          if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+            void refreshCircleDirectory();
+          }
         }
       }
     });
