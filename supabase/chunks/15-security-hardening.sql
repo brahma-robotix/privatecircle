@@ -656,6 +656,8 @@ WITH CHECK (
 );
 
 DROP POLICY IF EXISTS "Couples can view their love notes" ON public.love_notes;
+DROP POLICY IF EXISTS "Couples can view love notes" ON public.love_notes;
+DROP POLICY IF EXISTS "Users can create love notes" ON public.love_notes;
 DROP POLICY IF EXISTS "Users can create love notes for their partner" ON public.love_notes;
 DROP POLICY IF EXISTS "Authors can update love notes" ON public.love_notes;
 DROP POLICY IF EXISTS "Authors can delete love notes" ON public.love_notes;
@@ -740,6 +742,8 @@ WITH CHECK (
 );
 
 DROP POLICY IF EXISTS "Users can view visible memories" ON public.memories;
+DROP POLICY IF EXISTS "Users can view memories" ON public.memories;
+DROP POLICY IF EXISTS "Uploaders can manage memories" ON public.memories;
 DROP POLICY IF EXISTS "Users can upload memories" ON public.memories;
 DROP POLICY IF EXISTS "Uploaders can update or delete memories" ON public.memories;
 CREATE POLICY "Active users can view authorized memories"
@@ -771,6 +775,8 @@ ON public.memories FOR DELETE TO authenticated
 USING (public.is_active_user() AND uploaded_by = (SELECT auth.uid()));
 
 DROP POLICY IF EXISTS "Users can view visible calendar events" ON public.calendar_events;
+DROP POLICY IF EXISTS "Users can view calendar events" ON public.calendar_events;
+DROP POLICY IF EXISTS "Users can manage calendar events" ON public.calendar_events;
 DROP POLICY IF EXISTS "Users can manage own calendar events" ON public.calendar_events;
 CREATE POLICY "Active users can view authorized calendar events"
 ON public.calendar_events FOR SELECT TO authenticated
@@ -823,12 +829,14 @@ WITH CHECK (
 );
 
 DROP POLICY IF EXISTS "Users can manage own device sessions" ON public.user_device_sessions;
+DROP POLICY IF EXISTS "Users can manage sessions" ON public.user_device_sessions;
 CREATE POLICY "Active users can manage own device sessions"
 ON public.user_device_sessions FOR ALL TO authenticated
 USING (public.is_active_user() AND user_id = (SELECT auth.uid()))
 WITH CHECK (public.is_active_user() AND user_id = (SELECT auth.uid()));
 
 DROP POLICY IF EXISTS "Users can view own location audit logs" ON public.location_audit_logs;
+DROP POLICY IF EXISTS "Users can view location audits" ON public.location_audit_logs;
 CREATE POLICY "Active users can view authorized location audit logs"
 ON public.location_audit_logs FOR SELECT TO authenticated
 USING (
@@ -836,8 +844,17 @@ USING (
   AND (user_id = (SELECT auth.uid()) OR public.is_admin())
 );
 
--- Memory comments/reactions had RLS enabled but no policies. Grant only access
--- to users who can read the associated memory, with ownership for mutations.
+-- Retire legacy attachment policies if an older schema still has message_attachments.
+DO $
+BEGIN
+  IF to_regclass('public.message_attachments') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "Participants can read message attachments" ON public.message_attachments;
+    DROP POLICY IF EXISTS "Message senders can insert attachments" ON public.message_attachments;
+  END IF;
+END $;
+
+-- Memory comments/reactions had RLS enabled but no policies in the base schema.
+-- Grant only access to users who can read the associated memory, with ownership for mutations.
 CREATE POLICY "Users can view comments on visible memories"
 ON public.memory_comments FOR SELECT TO authenticated
 USING (
