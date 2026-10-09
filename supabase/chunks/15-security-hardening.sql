@@ -197,6 +197,17 @@ BEGIN
   IF new_role NOT IN ('admin', 'member') OR new_status NOT IN ('active', 'suspended') THEN
     RAISE EXCEPTION 'Invalid role or status';
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.profiles p
+    WHERE p.id = target_user_id AND p.role = 'admin' AND p.status = 'active'
+  )
+  AND (new_role <> 'admin' OR new_status <> 'active')
+  AND (
+    SELECT count(*) FROM public.profiles p
+    WHERE p.role = 'admin' AND p.status = 'active'
+  ) <= 1 THEN
+    RAISE EXCEPTION 'Cannot disable or demote the last active administrator';
+  END IF;
   UPDATE public.profiles
   SET role = new_role, status = new_status
   WHERE id = target_user_id;
