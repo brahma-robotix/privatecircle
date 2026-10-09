@@ -143,7 +143,7 @@ export const ChatService = {
 
       // Also fetch other profiles to establish direct conversation with circle partner if available
       const { data: otherProfiles } = await supabase
-        .from('profiles')
+        .from('circle_directory')
         .select('id, name')
         .neq('id', userId)
         .limit(5);
