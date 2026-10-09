@@ -18,16 +18,32 @@ export const AdminService = {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: true });
+      const [{ data, error }, { data: sharedLocations }] = await Promise.all([
+        supabase
+          .from('admin_directory')
+          .select('*')
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('shared_locations')
+          .select('id, location_settings'),
+      ]);
 
       if (error) {
         return { users: [], error: error.message };
       }
 
-      const users: User[] = (data || []).map((row) => mapProfileToUser(row));
+      const sharedLocationById = new Map(
+        (sharedLocations || []).map((row) => [row.id, row.location_settings])
+      );
+      const users: User[] = (data || []).map((row) => mapProfileToUser({
+        ...row,
+        // Only attach location data returned by the consent-filtered view.
+        location_settings: sharedLocationById.get(row.id) || {
+          enabled: false,
+          audience: 'off',
+          duration: 'always',
+        },
+      }));
       return { users, error: null };
     } catch (err: any) {
       return { users: [], error: err.message || 'Failed to fetch circle members' };
@@ -194,7 +210,7 @@ export const AdminService = {
 
     try {
       const { data: profile, error: fetchError } = await supabase
-        .from('profiles')
+        .from('admin_directory')
         .select('role')
         .eq('id', userId)
         .single();
@@ -233,7 +249,7 @@ export const AdminService = {
 
     try {
       const { data: profile, error: fetchError } = await supabase
-        .from('profiles')
+        .from('admin_directory')
         .select('status')
         .eq('id', userId)
         .single();
