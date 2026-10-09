@@ -188,24 +188,19 @@ export const AuthService = {
       }
 
       const profile = await this.fetchProfile(data.user.id);
-      if (profile && profile.status === 'suspended') {
-        // Sign out immediately if account was suspended by admin
+      if (!profile || profile.status !== 'active') {
+        // Fail closed: an auth account without an active database profile is not an app member.
         await supabase.auth.signOut();
-        return { user: null, session: null, error: 'This account is currently suspended by circle administrators.' };
+        return {
+          user: null,
+          session: null,
+          error: profile?.status === 'suspended'
+            ? 'This account is currently suspended by circle administrators.'
+            : 'This account is not an active PrivateCircle member. Ask an administrator for help.',
+        };
       }
 
-      const mappedUser = profile
-        ? mapProfileToUser(profile)
-        : {
-            id: data.user.id,
-            email: data.user.email || email,
-            name: data.user.user_metadata?.name || data.user.email?.split('@')[0] || 'Circle Member',
-            role: 'member' as const,
-            status: 'active' as const,
-            avatarBg: '#6366f1',
-          };
-
-      return { user: mappedUser, session: data.session, error: null };
+      return { user: mapProfileToUser(profile), session: data.session, error: null };
     } catch (err: any) {
       return { user: null, session: null, error: formatAuthError(err) };
     }
