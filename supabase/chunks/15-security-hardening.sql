@@ -87,7 +87,7 @@ WITH (security_barrier = true)
 AS
 SELECT id, name, avatar_bg, bio, created_at
 FROM public.profiles
-WHERE status = 'active';
+WHERE status = 'active' AND public.is_active_user();
 GRANT SELECT ON public.circle_directory TO authenticated;
 
 -- Only the owner, an explicitly linked partner with sharing enabled, or an
@@ -97,9 +97,10 @@ WITH (security_barrier = true)
 AS
 SELECT p.id, p.name, p.avatar_bg, p.location_settings
 FROM public.profiles p
-WHERE p.id = (SELECT auth.uid())
+WHERE public.is_active_user()
+  AND (p.id = (SELECT auth.uid())
    OR (
-     coalesce((p.location_settings->>'enabled')::boolean, false) = true
+     p.location_settings->>'enabled' = 'true'
      AND (
        (
          p.location_settings->>'audience' IN ('partner', 'partner_and_admin')
@@ -114,7 +115,7 @@ WHERE p.id = (SELECT auth.uid())
          AND public.is_admin()
        )
      )
-   );
+   ));
 GRANT SELECT ON public.shared_locations TO authenticated;
 
 -- 4) Invitation records/codes are private. Verification returns only a boolean.
@@ -352,6 +353,7 @@ CREATE POLICY "Users can upload attachments to their own folder"
 ON storage.objects FOR INSERT TO authenticated
 WITH CHECK (
   bucket_id = 'attachments'
+  AND public.is_active_user()
   AND (SELECT auth.uid())::text = (storage.foldername(name))[1]
 );
 
@@ -359,6 +361,7 @@ CREATE POLICY "Users can delete their own attachment objects"
 ON storage.objects FOR DELETE TO authenticated
 USING (
   bucket_id = 'attachments'
+  AND public.is_active_user()
   AND (SELECT auth.uid())::text = (storage.foldername(name))[1]
 );
 
@@ -413,10 +416,13 @@ CREATE POLICY "Active participants can view conversations"
 ON public.conversations FOR SELECT TO authenticated
 USING (
   public.is_active_user()
-  AND EXISTS (
-    SELECT 1 FROM public.conversation_participants cp
-    WHERE cp.conversation_id = public.conversations.id
-      AND cp.user_id = (SELECT auth.uid())
+  AND (
+    EXISTS (
+      SELECT 1 FROM public.conversation_participants cp
+      WHERE cp.conversation_id = public.conversations.id
+        AND cp.user_id = (SELECT auth.uid())
+    )
+    OR (public.conversations.is_circle = true AND public.conversations.type = 'group')
   )
 );
 CREATE POLICY "Users can create ordinary conversations"
