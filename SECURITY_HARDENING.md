@@ -4,7 +4,7 @@ This change is a security patch proposal. It is not active in the hosted Supabas
 
 ## What changed
 
-- Restricts direct profile reads to the account owner and active admins.
+- Restricts direct profile reads to the account owner; administrators use a separate view that excludes location and privacy settings.
 - Adds a limited circle directory, a column-limited admin directory, and a consent-filtered location view.
 - Revokes direct updates to privileged profile columns; admin role/status changes use a database-checked RPC.
 - Removes public invitation-row reads. Invitation verification returns only a boolean.
