@@ -96,6 +96,23 @@ $;
 REVOKE ALL ON FUNCTION public.is_active_user() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_active_user() TO authenticated;
 
+-- Check partner links without granting direct access to another user's profile row.
+CREATE OR REPLACE FUNCTION public.is_linked_partner(owner_user_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles owner_profile
+    WHERE owner_profile.id = owner_user_id
+      AND owner_profile.partner_id = (SELECT auth.uid())
+  );
+$;
+REVOKE ALL ON FUNCTION public.is_linked_partner(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_linked_partner(uuid) TO authenticated;
+
 CREATE OR REPLACE VIEW public.circle_directory
 WITH (security_barrier = true)
 AS
@@ -669,11 +686,7 @@ USING (
     author_id = (SELECT auth.uid())
     OR (
       partner_id = (SELECT auth.uid())
-      AND EXISTS (
-        SELECT 1 FROM public.profiles me
-        WHERE me.id = public.love_notes.author_id
-          AND me.partner_id = (SELECT auth.uid())
-      )
+      AND public.is_linked_partner(public.love_notes.author_id)
     )
   )
 );
@@ -718,11 +731,7 @@ USING (
     user_id = (SELECT auth.uid())
     OR (
       partner_id = (SELECT auth.uid())
-      AND EXISTS (
-        SELECT 1 FROM public.profiles me
-        WHERE me.id = public.relationship_milestones.user_id
-          AND me.partner_id = (SELECT auth.uid())
-      )
+      AND public.is_linked_partner(public.relationship_milestones.user_id)
     )
   )
 );
