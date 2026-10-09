@@ -151,7 +151,7 @@ export const AuthService = {
               id: data.user.id,
               email: data.user.email || email,
               name: name.trim() || 'Circle Member',
-              role: (inviteCheck.isBootstrapAdmin ? 'admin' : 'member') as UserRole,
+              role: 'member' as UserRole,
               status: 'active' as const,
               avatarBg: '#6366f1',
             };
