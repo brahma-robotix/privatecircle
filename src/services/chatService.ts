@@ -132,14 +132,23 @@ export const ChatService = {
       }
 
       if (groupConvId) {
-        // Add user as participant
-        await supabase
+        // Avoid an upsert that would require broad UPDATE rights on membership rows.
+        const { data: membership } = await supabase
           .from('conversation_participants')
-          .upsert({
-            conversation_id: groupConvId,
-            user_id: userId,
-            role: 'member',
-          }, { onConflict: 'conversation_id,user_id' });
+          .select('user_id')
+          .eq('conversation_id', groupConvId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (!membership) {
+          await supabase
+            .from('conversation_participants')
+            .insert({
+              conversation_id: groupConvId,
+              user_id: userId,
+              role: 'member',
+            });
+        }
       }
 
       // Also fetch other profiles to establish direct conversation with circle partner if available
