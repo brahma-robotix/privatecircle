@@ -67,9 +67,7 @@ CREATE POLICY "Users can view own profile"
 ON public.profiles FOR SELECT TO authenticated
 USING (id = (SELECT auth.uid()));
 
-CREATE POLICY "Admins can view profiles"
-ON public.profiles FOR SELECT TO authenticated
-USING (public.is_admin());
+-- Administrators use the column-limited admin_directory view instead of reading private profile fields.
 
 CREATE POLICY "Users can update safe profile fields"
 ON public.profiles FOR UPDATE TO authenticated
@@ -105,6 +103,15 @@ SELECT id, name, avatar_bg, bio, created_at
 FROM public.profiles
 WHERE status = 'active' AND public.is_active_user();
 GRANT SELECT ON public.circle_directory TO authenticated;
+
+-- Admin-only member management view excludes location and privacy JSON entirely.
+CREATE OR REPLACE VIEW public.admin_directory
+WITH (security_barrier = true)
+AS
+SELECT id, email, name, role, status, avatar_bg, bio, created_at
+FROM public.profiles
+WHERE public.is_admin();
+GRANT SELECT ON public.admin_directory TO authenticated;
 
 -- Only the owner, an explicitly linked partner with sharing enabled, or an
 -- active admin when the owner opted into partner_and_admin can read locations.
@@ -420,9 +427,6 @@ DROP POLICY IF EXISTS "Users can update safe profile fields" ON public.profiles;
 CREATE POLICY "Users can view own profile"
 ON public.profiles FOR SELECT TO authenticated
 USING (public.is_active_user() AND id = (SELECT auth.uid()));
-CREATE POLICY "Admins can view profiles"
-ON public.profiles FOR SELECT TO authenticated
-USING (public.is_active_user() AND public.is_admin());
 CREATE POLICY "Users can update safe profile fields"
 ON public.profiles FOR UPDATE TO authenticated
 USING (public.is_active_user() AND id = (SELECT auth.uid()))
