@@ -124,6 +124,9 @@ export interface AppState {
   toggleCallVideo: () => void;
   toggleCallScreenShare: () => void;
 
+  // Refresh the safe directory and only consent-authorized location data.
+  refreshCircleDirectory: () => Promise<void>;
+
   // Location & Privacy
   updateLocationSettings: (settings: Partial<UserLocationSettings>) => void;
   stopLocationSharing: () => void;
@@ -273,6 +276,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     : (users.find((u) => u.id === currentUserId) || null);
   const unreadNotificationsCount = notifications.filter((n) => !n.isRead).length;
 
+  const refreshCircleDirectory = async (): Promise<void> => {
+    const supabase = getSupabaseClient();
+    if (!isSupabaseConfigured() || !supabase) return;
+
+    try {
+      const [{ data: directory, error }, { data: sharedLocations }] = await Promise.all([
+        supabase
+          .from('circle_directory')
+          .select('id, name, avatar_bg, bio, created_at')
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('shared_locations')
+          .select('id, location_settings'),
+      ]);
+
+      if (error) {
+        console.warn('[AppContext] Could not refresh safe circle directory:', error.message);
+        return;
+      }
+
+      const sharedLocationById = new Map(
+        (sharedLocations || []).map((row) => [row.id, row.location_settings])
+      );
+      const safeUsers = (directory || []).map((row) => mapProfileToUser({
+        ...row,
+        email: '',
+        role: 'member',
+        status: 'active',
+        location_settings: sharedLocationById.get(row.id) || {
+          enabled: false,
+          audience: 'off',
+          duration: 'always',
+        },
+      }));
+      setUsers(safeUsers);
+    } catch (err) {
+      console.warn('[AppContext] Circle directory refresh failed:', err);
+    }
+  };
+
   // Bootstrap Supabase Session on App Mount
   useEffect(() => {
     let isMounted = true;
@@ -304,6 +347,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (isMounted) {
                 setSupabaseUser(mapped);
                 setAuthMode('supabase');
+                void refreshCircleDirectory();
               }
             }
           }
@@ -339,6 +383,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               };
           setSupabaseUser(mapped);
           setAuthMode('supabase');
+          void refreshCircleDirectory();
         }
       }
     });
@@ -1355,6 +1400,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         currentUser,
         users,
+        refreshCircleDirectory,
         conversations,
         messages,
         invitations,
