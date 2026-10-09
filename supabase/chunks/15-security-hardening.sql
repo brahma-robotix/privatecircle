@@ -365,3 +365,484 @@ USING (
 -- Manual verification after applying in a staging project:
 -- SELECT policyname, tablename FROM pg_policies WHERE schemaname = 'public';
 -- SELECT * FROM storage.buckets WHERE id = 'attachments';
+
+
+-- 9) Require an active account for every sensitive data operation.
+CREATE OR REPLACE FUNCTION public.is_active_user()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles p
+    WHERE p.id = (SELECT auth.uid()) AND p.status = 'active'
+  );
+$$;
+REVOKE ALL ON FUNCTION public.is_active_user() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_active_user() TO authenticated;
+
+-- 10) Rebuild policies with active-account checks and explicit row ownership.
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Admins can view profiles" ON public.profiles;
+DROP POLICY IF EXISTS "Users can update safe profile fields" ON public.profiles;
+CREATE POLICY "Users can view own profile"
+ON public.profiles FOR SELECT TO authenticated
+USING (public.is_active_user() AND id = (SELECT auth.uid()));
+CREATE POLICY "Admins can view profiles"
+ON public.profiles FOR SELECT TO authenticated
+USING (public.is_active_user() AND public.is_admin());
+CREATE POLICY "Users can update safe profile fields"
+ON public.profiles FOR UPDATE TO authenticated
+USING (public.is_active_user() AND id = (SELECT auth.uid()))
+WITH CHECK (public.is_active_user() AND id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Admins can manage invitations" ON public.invitations;
+CREATE POLICY "Admins can manage invitations"
+ON public.invitations FOR ALL TO authenticated
+USING (public.is_active_user() AND public.is_admin())
+WITH CHECK (public.is_active_user() AND public.is_admin());
+
+DROP POLICY IF EXISTS "Users can view conversations they participate in" ON public.conversations;
+DROP POLICY IF EXISTS "Users can create ordinary conversations" ON public.conversations;
+DROP POLICY IF EXISTS "Admins can create circle conversations" ON public.conversations;
+DROP POLICY IF EXISTS "Active participants can view conversations" ON public.conversations;
+DROP POLICY IF EXISTS "Users can create conversations" ON public.conversations;
+CREATE POLICY "Active participants can view conversations"
+ON public.conversations FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.conversations.id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+CREATE POLICY "Users can create ordinary conversations"
+ON public.conversations FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND created_by = (SELECT auth.uid())
+  AND is_circle = false
+);
+CREATE POLICY "Admins can create circle conversations"
+ON public.conversations FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND created_by = (SELECT auth.uid())
+  AND is_circle = true
+  AND public.is_admin()
+);
+REVOKE UPDATE ON TABLE public.conversations FROM PUBLIC, anon, authenticated;
+GRANT UPDATE (last_message, last_message_timestamp)
+ON TABLE public.conversations TO authenticated;
+CREATE POLICY "Active participants can update conversation preview"
+ON public.conversations FOR UPDATE TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.conversations.id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+)
+WITH CHECK (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.conversations.id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+
+DROP POLICY IF EXISTS "Participants can view conversation members" ON public.conversation_participants;
+DROP POLICY IF EXISTS "Authorized circle membership" ON public.conversation_participants;
+CREATE POLICY "Active participants can view conversation members"
+ON public.conversation_participants FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.conversation_participants.conversation_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+CREATE POLICY "Authorized circle membership"
+ON public.conversation_participants FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND (
+    public.is_admin()
+    OR EXISTS (
+      SELECT 1 FROM public.conversations c
+      WHERE c.id = conversation_id
+        AND c.created_by = (SELECT auth.uid())
+    )
+    OR (
+      user_id = (SELECT auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.conversations c
+        WHERE c.id = conversation_id AND c.is_circle = true AND c.type = 'group'
+      )
+    )
+  )
+);
+
+DROP POLICY IF EXISTS "Participants can read messages" ON public.messages;
+DROP POLICY IF EXISTS "Participants can send messages" ON public.messages;
+DROP POLICY IF EXISTS "Senders can edit or delete own messages" ON public.messages;
+DROP POLICY IF EXISTS "Senders can delete own messages" ON public.messages;
+CREATE POLICY "Active participants can read messages"
+ON public.messages FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.messages.conversation_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+CREATE POLICY "Active participants can send messages"
+ON public.messages FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND sender_id = (SELECT auth.uid())
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.messages.conversation_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+REVOKE UPDATE ON TABLE public.messages FROM PUBLIC, anon, authenticated;
+GRANT UPDATE (text, is_edited, translated_text, original_text)
+ON TABLE public.messages TO authenticated;
+CREATE POLICY "Senders can update own message content"
+ON public.messages FOR UPDATE TO authenticated
+USING (
+  public.is_active_user()
+  AND sender_id = (SELECT auth.uid())
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.messages.conversation_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+)
+WITH CHECK (
+  public.is_active_user()
+  AND sender_id = (SELECT auth.uid())
+  AND EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = public.messages.conversation_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+CREATE POLICY "Senders or admins can delete messages"
+ON public.messages FOR DELETE TO authenticated
+USING (
+  public.is_active_user()
+  AND (
+    sender_id = (SELECT auth.uid())
+    OR public.is_admin()
+  )
+);
+
+DROP POLICY IF EXISTS "Conversation participants can view attachments" ON public.attachments;
+DROP POLICY IF EXISTS "Users can insert attachments for their messages" ON public.attachments;
+DROP POLICY IF EXISTS "Uploaders can delete their attachments" ON public.attachments;
+CREATE POLICY "Active conversation participants can view attachments"
+ON public.attachments FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1
+    FROM public.messages m
+    JOIN public.conversation_participants cp ON cp.conversation_id = m.conversation_id
+    WHERE m.id = public.attachments.message_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+CREATE POLICY "Users can attach files to own messages"
+ON public.attachments FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND uploaded_by = (SELECT auth.uid())
+  AND file_path LIKE ((SELECT auth.uid())::text || '/%')
+  AND file_size_bytes BETWEEN 0 AND 52428800
+  AND EXISTS (
+    SELECT 1
+    FROM public.messages m
+    JOIN public.conversation_participants cp ON cp.conversation_id = m.conversation_id
+    WHERE m.id = public.attachments.message_id
+      AND m.sender_id = (SELECT auth.uid())
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+CREATE POLICY "Uploaders can delete own attachments"
+ON public.attachments FOR DELETE TO authenticated
+USING (public.is_active_user() AND uploaded_by = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Participants can view reactions" ON public.message_reactions;
+DROP POLICY IF EXISTS "Users can manage own reactions" ON public.message_reactions;
+CREATE POLICY "Active participants can view reactions"
+ON public.message_reactions FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.messages m
+    JOIN public.conversation_participants cp ON cp.conversation_id = m.conversation_id
+    WHERE m.id = public.message_reactions.message_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+CREATE POLICY "Active participants can manage own reactions"
+ON public.message_reactions FOR ALL TO authenticated
+USING (
+  public.is_active_user()
+  AND user_id = (SELECT auth.uid())
+  AND EXISTS (
+    SELECT 1 FROM public.messages m
+    JOIN public.conversation_participants cp ON cp.conversation_id = m.conversation_id
+    WHERE m.id = public.message_reactions.message_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+)
+WITH CHECK (
+  public.is_active_user()
+  AND user_id = (SELECT auth.uid())
+  AND EXISTS (
+    SELECT 1 FROM public.messages m
+    JOIN public.conversation_participants cp ON cp.conversation_id = m.conversation_id
+    WHERE m.id = public.message_reactions.message_id
+      AND cp.user_id = (SELECT auth.uid())
+  )
+);
+
+DROP POLICY IF EXISTS "Couples can view their love notes" ON public.love_notes;
+DROP POLICY IF EXISTS "Users can create love notes for their partner" ON public.love_notes;
+DROP POLICY IF EXISTS "Authors can update love notes" ON public.love_notes;
+DROP POLICY IF EXISTS "Authors can delete love notes" ON public.love_notes;
+CREATE POLICY "Linked partners can view love notes"
+ON public.love_notes FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND (
+    author_id = (SELECT auth.uid())
+    OR (
+      partner_id = (SELECT auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.profiles me
+        WHERE me.id = public.love_notes.author_id
+          AND me.partner_id = (SELECT auth.uid())
+      )
+    )
+  )
+);
+CREATE POLICY "Users can create notes for linked partner"
+ON public.love_notes FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND author_id = (SELECT auth.uid())
+  AND (
+    partner_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM public.profiles me
+      WHERE me.id = (SELECT auth.uid()) AND me.partner_id = public.love_notes.partner_id
+    )
+  )
+);
+CREATE POLICY "Authors can update own love notes"
+ON public.love_notes FOR UPDATE TO authenticated
+USING (public.is_active_user() AND author_id = (SELECT auth.uid()))
+WITH CHECK (
+  public.is_active_user()
+  AND author_id = (SELECT auth.uid())
+  AND (
+    partner_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM public.profiles me
+      WHERE me.id = (SELECT auth.uid()) AND me.partner_id = public.love_notes.partner_id
+    )
+  )
+);
+CREATE POLICY "Authors can delete own love notes"
+ON public.love_notes FOR DELETE TO authenticated
+USING (public.is_active_user() AND author_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Couples can view milestones" ON public.relationship_milestones;
+DROP POLICY IF EXISTS "Users can manage milestones" ON public.relationship_milestones;
+CREATE POLICY "Linked partners can view milestones"
+ON public.relationship_milestones FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND (
+    user_id = (SELECT auth.uid())
+    OR (
+      partner_id = (SELECT auth.uid())
+      AND EXISTS (
+        SELECT 1 FROM public.profiles me
+        WHERE me.id = public.relationship_milestones.user_id
+          AND me.partner_id = (SELECT auth.uid())
+      )
+    )
+  )
+);
+CREATE POLICY "Users can manage own milestones"
+ON public.relationship_milestones FOR ALL TO authenticated
+USING (public.is_active_user() AND user_id = (SELECT auth.uid()))
+WITH CHECK (
+  public.is_active_user()
+  AND user_id = (SELECT auth.uid())
+  AND (
+    partner_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM public.profiles me
+      WHERE me.id = (SELECT auth.uid()) AND me.partner_id = public.relationship_milestones.partner_id
+    )
+  )
+);
+
+DROP POLICY IF EXISTS "Users can view visible memories" ON public.memories;
+DROP POLICY IF EXISTS "Users can upload memories" ON public.memories;
+DROP POLICY IF EXISTS "Uploaders can update or delete memories" ON public.memories;
+CREATE POLICY "Active users can view authorized memories"
+ON public.memories FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND (
+    uploaded_by = (SELECT auth.uid())
+    OR visibility = 'circle'
+    OR (
+      visibility = 'partner'
+      AND EXISTS (
+        SELECT 1 FROM public.profiles me
+        WHERE me.id = (SELECT auth.uid())
+          AND me.partner_id = public.memories.uploaded_by
+      )
+    )
+  )
+);
+CREATE POLICY "Users can create own memories"
+ON public.memories FOR INSERT TO authenticated
+WITH CHECK (public.is_active_user() AND uploaded_by = (SELECT auth.uid()));
+CREATE POLICY "Uploaders can update own memories"
+ON public.memories FOR UPDATE TO authenticated
+USING (public.is_active_user() AND uploaded_by = (SELECT auth.uid()))
+WITH CHECK (public.is_active_user() AND uploaded_by = (SELECT auth.uid()));
+CREATE POLICY "Uploaders can delete own memories"
+ON public.memories FOR DELETE TO authenticated
+USING (public.is_active_user() AND uploaded_by = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Users can view visible calendar events" ON public.calendar_events;
+DROP POLICY IF EXISTS "Users can manage own calendar events" ON public.calendar_events;
+CREATE POLICY "Active users can view authorized calendar events"
+ON public.calendar_events FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND (
+    owner_id = (SELECT auth.uid())
+    OR visibility = 'circle'
+    OR (
+      visibility = 'partner'
+      AND EXISTS (
+        SELECT 1 FROM public.profiles me
+        WHERE me.id = (SELECT auth.uid())
+          AND me.partner_id = public.calendar_events.owner_id
+      )
+    )
+  )
+);
+CREATE POLICY "Users can manage own calendar events"
+ON public.calendar_events FOR ALL TO authenticated
+USING (public.is_active_user() AND owner_id = (SELECT auth.uid()))
+WITH CHECK (public.is_active_user() AND owner_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Call participants can view call logs" ON public.call_logs;
+DROP POLICY IF EXISTS "Call participants can insert call logs" ON public.call_logs;
+CREATE POLICY "Active call participants can view logs"
+ON public.call_logs FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND ((SELECT auth.uid()) = caller_id OR (SELECT auth.uid()) = receiver_id)
+);
+CREATE POLICY "Users can log calls involving themselves"
+ON public.call_logs FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND caller_id = (SELECT auth.uid())
+  AND (
+    receiver_id = (SELECT auth.uid())
+    OR EXISTS (
+      SELECT 1 FROM public.profiles me
+      WHERE me.id = (SELECT auth.uid()) AND me.partner_id = public.call_logs.receiver_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM public.conversation_participants a
+      JOIN public.conversation_participants b ON b.conversation_id = a.conversation_id
+      WHERE a.user_id = (SELECT auth.uid())
+        AND b.user_id = public.call_logs.receiver_id
+    )
+  )
+);
+
+DROP POLICY IF EXISTS "Users can manage own device sessions" ON public.user_device_sessions;
+CREATE POLICY "Active users can manage own device sessions"
+ON public.user_device_sessions FOR ALL TO authenticated
+USING (public.is_active_user() AND user_id = (SELECT auth.uid()))
+WITH CHECK (public.is_active_user() AND user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Users can view own location audit logs" ON public.location_audit_logs;
+CREATE POLICY "Active users can view authorized location audit logs"
+ON public.location_audit_logs FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND (user_id = (SELECT auth.uid()) OR public.is_admin())
+);
+
+-- Memory comments/reactions had RLS enabled but no policies. Grant only access
+-- to users who can read the associated memory, with ownership for mutations.
+CREATE POLICY "Users can view comments on visible memories"
+ON public.memory_comments FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.memories m
+    WHERE m.id = public.memory_comments.memory_id
+  )
+);
+CREATE POLICY "Users can comment on visible memories"
+ON public.memory_comments FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND author_id = (SELECT auth.uid())
+  AND EXISTS (
+    SELECT 1 FROM public.memories m
+    WHERE m.id = public.memory_comments.memory_id
+  )
+);
+CREATE POLICY "Authors can delete own memory comments"
+ON public.memory_comments FOR DELETE TO authenticated
+USING (public.is_active_user() AND author_id = (SELECT auth.uid()));
+
+CREATE POLICY "Users can view reactions on visible memories"
+ON public.memory_reactions FOR SELECT TO authenticated
+USING (
+  public.is_active_user()
+  AND EXISTS (
+    SELECT 1 FROM public.memories m
+    WHERE m.id = public.memory_reactions.memory_id
+  )
+);
+CREATE POLICY "Users can react to visible memories"
+ON public.memory_reactions FOR INSERT TO authenticated
+WITH CHECK (
+  public.is_active_user()
+  AND user_id = (SELECT auth.uid())
+  AND EXISTS (
+    SELECT 1 FROM public.memories m
+    WHERE m.id = public.memory_reactions.memory_id
+  )
+);
+CREATE POLICY "Users can remove own memory reactions"
+ON public.memory_reactions FOR DELETE TO authenticated
+USING (public.is_active_user() AND user_id = (SELECT auth.uid()));
