@@ -76,7 +76,7 @@ ON public.profiles FOR UPDATE TO authenticated
 USING (id = (SELECT auth.uid()))
 WITH CHECK (id = (SELECT auth.uid()));
 
-REVOKE UPDATE ON TABLE public.profiles FROM anon, authenticated;
+REVOKE UPDATE ON TABLE public.profiles FROM PUBLIC, anon, authenticated;
 REVOKE UPDATE (id, email, role, status, partner_id, created_at, updated_at)
 ON TABLE public.profiles FROM authenticated;
 GRANT UPDATE (name, avatar_bg, bio, relationship_start_date, location_settings, privacy_settings)
