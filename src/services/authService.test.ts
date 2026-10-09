@@ -99,11 +99,8 @@ describe('AuthService unit tests', () => {
       expect('error' in fbRes).toBe(true);
     });
 
-    it('supports claimInvitation without throwing an exception', async () => {
-      expect(typeof AuthService.claimInvitation).toBe('function');
-      const res = await AuthService.claimInvitation('INV-TEST', 'user-123');
-      expect(res).toBeDefined();
-      expect(typeof res.success).toBe('boolean');
+    it('does not expose an invitation-claim API that can bypass atomic signup claiming', () => {
+      expect('claimInvitation' in AuthService).toBe(false);
     });
   });
 });
