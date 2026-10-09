@@ -192,57 +192,62 @@ const STORAGE_KEY = 'privatecircle_prototype_v3';
 const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const saved = StorageService.load<any>(STORAGE_KEY, null);
+  const isTestEnv = import.meta.env.MODE === 'test';
+  const useSupabaseState = isSupabaseConfigured() && !isTestEnv;
+  // Never hydrate production Supabase sessions from cached demo/private state.
+  const saved = useSupabaseState ? null : StorageService.load<any>(STORAGE_KEY, null);
 
-  const [users, setUsers] = useState<User[]>(saved?.users || INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>(useSupabaseState ? [] : (saved?.users || INITIAL_USERS));
   const [conversations, setConversations] = useState<Conversation[]>(
-    saved?.conversations || INITIAL_CONVERSATIONS
+    useSupabaseState ? [] : (saved?.conversations || INITIAL_CONVERSATIONS)
   );
   const [messages, setMessages] = useState<Record<string, Message[]>>(
-    saved?.messages || INITIAL_MESSAGES
+    useSupabaseState ? {} : (saved?.messages || INITIAL_MESSAGES)
   );
   const [invitations, setInvitations] = useState<Invitation[]>(
-    saved?.invitations || INITIAL_INVITATIONS
+    useSupabaseState ? [] : (saved?.invitations || INITIAL_INVITATIONS)
   );
   const [locationAuditLog, setLocationAuditLog] = useState<LocationAuditRecord[]>(
-    saved?.locationAuditLog || INITIAL_LOCATION_AUDIT_LOG
+    useSupabaseState ? [] : (saved?.locationAuditLog || INITIAL_LOCATION_AUDIT_LOG)
   );
   const [milestones, setMilestones] = useState<RelationshipMilestone[]>(
-    saved?.milestones || INITIAL_MILESTONES
+    useSupabaseState ? [] : (saved?.milestones || INITIAL_MILESTONES)
   );
   const [loveNotes, setLoveNotes] = useState<LoveNote[]>(
-    saved?.loveNotes || INITIAL_LOVE_NOTES
+    useSupabaseState ? [] : (saved?.loveNotes || INITIAL_LOVE_NOTES)
   );
   const [memories, setMemories] = useState<MemoryItem[]>(
-    saved?.memories || INITIAL_MEMORIES
+    useSupabaseState ? [] : (saved?.memories || INITIAL_MEMORIES)
   );
   const [callLogs, setCallLogs] = useState<CallLogRecord[]>(
-    saved?.callLogs || INITIAL_CALL_LOGS
+    useSupabaseState ? [] : (saved?.callLogs || INITIAL_CALL_LOGS)
   );
   const [notifications, setNotifications] = useState<AppNotification[]>(
-    saved?.notifications || INITIAL_NOTIFICATIONS
+    useSupabaseState ? [] : (saved?.notifications || INITIAL_NOTIFICATIONS)
   );
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>(
-    saved?.calendarEvents || INITIAL_CALENDAR_EVENTS
+    useSupabaseState ? [] : (saved?.calendarEvents || INITIAL_CALENDAR_EVENTS)
   );
   const [deviceSessions, setDeviceSessions] = useState<UserDeviceSession[]>(
-    saved?.deviceSessions || INITIAL_DEVICE_SESSIONS
+    useSupabaseState ? [] : (saved?.deviceSessions || INITIAL_DEVICE_SESSIONS)
   );
-
-  const isTestEnv = import.meta.env.MODE === 'test';
 
   // Supabase Auth State
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(!isTestEnv);
-  const [authMode, setAuthMode] = useState<'supabase' | 'mock'>(() =>
-    saved?.authMode || (isTestEnv ? 'mock' : (isSupabaseConfigured() ? 'supabase' : 'mock'))
+  const [authMode, setAuthModeState] = useState<'supabase' | 'mock'>(() =>
+    useSupabaseState ? 'supabase' : (saved?.authMode || 'mock')
   );
+  const setAuthMode = (mode: 'supabase' | 'mock') => {
+    if (mode === 'mock' && useSupabaseState) return;
+    setAuthModeState(mode);
+  };
   const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(
-    saved?.currentUserId || 'user-admin'
+    useSupabaseState ? null : (saved?.currentUserId || 'user-admin')
   );
   const [activeConversationId, setActiveConversationId] = useState<string | null>(
-    INITIAL_CONVERSATIONS[1]?.id || INITIAL_CONVERSATIONS[0].id // default to Maya chat
+    useSupabaseState ? null : (INITIAL_CONVERSATIONS[1]?.id || INITIAL_CONVERSATIONS[0].id)
   );
   const [currentView, setCurrentView] = useState<ViewType>(() => {
     if (typeof window !== 'undefined' && window.location.search) {
@@ -343,8 +348,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Persist state
+  // Persist demo state only. Real Supabase conversations and private data stay out of localStorage.
   useEffect(() => {
+    if (useSupabaseState) {
+      StorageService.remove(STORAGE_KEY);
+      return;
+    }
     StorageService.save(STORAGE_KEY, {
       users,
       conversations,
@@ -583,6 +592,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const login = (userId: string) => {
+    if (useSupabaseState) return;
     setAuthMode('mock');
     setCurrentUserId(userId);
     setCurrentView('chat');
@@ -1318,6 +1328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetToMockData = () => {
+    if (useSupabaseState) return;
     StorageService.remove(STORAGE_KEY);
     setUsers(INITIAL_USERS);
     setConversations(INITIAL_CONVERSATIONS);
