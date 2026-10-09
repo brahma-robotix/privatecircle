@@ -1,6 +1,12 @@
 -- ==============================================================================
--- PrivateCircle: Production PostgreSQL Database Schema & Security Architecture
+-- PrivateCircle: Base PostgreSQL Schema
 -- ==============================================================================
+-- SECURITY WARNING:
+-- This file is the base schema, not the final hardened production policy set.
+-- After applying this file and the numbered SQL chunks, apply
+-- supabase/chunks/15-security-hardening.sql before exposing the app to users.
+-- Do not use this schema alone for production; it contains legacy policies that
+-- the hardening migration replaces.
 -- Designed for Supabase: Invite-Only Couple & Private Circle Communication App
 --
 -- INSTRUCTIONS:
