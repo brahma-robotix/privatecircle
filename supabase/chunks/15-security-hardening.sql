@@ -30,7 +30,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.profiles) THEN
     RAISE EXCEPTION 'Bootstrap is only available before the first profile exists';
   END IF;
-  token := encode(extensions.gen_random_bytes(32), 'hex');
+  token := upper(encode(extensions.gen_random_bytes(32), 'hex'));
   INSERT INTO private.admin_bootstrap_tokens(token_hash, email)
   VALUES (encode(extensions.digest(token, 'sha256'), 'hex'), lower(btrim(p_email)));
   RETURN token;
@@ -171,8 +171,8 @@ CREATE OR REPLACE FUNCTION public.admin_update_profile_access(
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
+SET search_path = ''
+AS $
 BEGIN
   IF (SELECT auth.uid()) IS NULL OR NOT public.is_admin() THEN
     RAISE EXCEPTION 'Administrator access required' USING ERRCODE = '42501';
@@ -198,8 +198,8 @@ CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, private, pg_temp
-AS $$
+SET search_path = ''
+AS $
 DECLARE
   user_name text;
   invite_code text := upper(btrim(coalesce(new.raw_user_meta_data->>'invite_code', '')));
