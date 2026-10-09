@@ -276,6 +276,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     : (users.find((u) => u.id === currentUserId) || null);
   const unreadNotificationsCount = notifications.filter((n) => !n.isRead).length;
 
+  const clearSupabaseUserState = () => {
+    setSupabaseUser(null);
+    setUsers([]);
+    setConversations([]);
+    setMessages({});
+    setInvitations([]);
+    setLocationAuditLog([]);
+    setMilestones([]);
+    setLoveNotes([]);
+    setMemories([]);
+    setCallLogs([]);
+    setNotifications([]);
+    setCalendarEvents([]);
+    setDeviceSessions([]);
+    setActiveConversationId(null);
+    setActiveCall(null);
+    setReplyingToMessage(null);
+  };
+
   const refreshCircleDirectory = async (): Promise<void> => {
     const supabase = getSupabaseClient();
     if (!isSupabaseConfigured() || !supabase) return;
@@ -330,25 +349,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const { session } = await AuthService.getSession();
           if (session?.user && isMounted) {
             const profile = await AuthService.fetchProfile(session.user.id);
-            if (profile && profile.status === 'suspended') {
+            if (!profile || profile.status !== 'active') {
               await AuthService.signOut();
-              if (isMounted) setSupabaseUser(null);
-            } else {
-              const mapped = profile
-                ? mapProfileToUser(profile)
-                : {
-                    id: session.user.id,
-                    email: session.user.email || '',
-                    name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Circle Member',
-                    role: 'member' as const,
-                    status: 'active' as const,
-                    avatarBg: '#6366f1',
-                  };
-              if (isMounted) {
-                setSupabaseUser(mapped);
-                setAuthMode('supabase');
-                void refreshCircleDirectory();
-              }
+              if (isMounted) clearSupabaseUserState();
+            } else if (isMounted) {
+              setSupabaseUser(mapProfileToUser(profile));
+              setAuthMode('supabase');
+              void refreshCircleDirectory();
             }
           }
         } catch (err) {
@@ -365,23 +372,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const sub = AuthService.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT' || !session?.user) {
-        if (isMounted) {
-          setSupabaseUser(null);
-        }
+        if (isMounted) clearSupabaseUserState();
       } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
         if (isMounted && session.user) {
           const profile = await AuthService.fetchProfile(session.user.id);
-          const mapped = profile
-            ? mapProfileToUser(profile)
-            : {
-                id: session.user.id,
-                email: session.user.email || '',
-                name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Circle Member',
-                role: 'member' as const,
-                status: 'active' as const,
-                avatarBg: '#6366f1',
-              };
-          setSupabaseUser(mapped);
+          if (!profile || profile.status !== 'active') {
+            await AuthService.signOut();
+            if (isMounted) clearSupabaseUserState();
+            return;
+          }
+          clearSupabaseUserState();
+          setSupabaseUser(mapProfileToUser(profile));
           setAuthMode('supabase');
           void refreshCircleDirectory();
         }
@@ -453,9 +454,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const supabaseSignIn = async (email: string, password: string) => {
     const res = await AuthService.signIn(email, password);
     if (!res.error && res.user) {
+      clearSupabaseUserState();
       setSupabaseUser(res.user);
       setAuthMode('supabase');
       setCurrentView('chat');
+      void refreshCircleDirectory();
     }
     return { error: res.error };
   };
@@ -468,9 +471,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     const res = await AuthService.signUp(email, password, name, inviteCode);
     if (!res.error && res.user && res.session) {
+      clearSupabaseUserState();
       setSupabaseUser(res.user);
       setAuthMode('supabase');
       setCurrentView('chat');
+      void refreshCircleDirectory();
     }
     return { error: res.error };
   };
@@ -485,10 +490,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const supabaseSignOut = async () => {
     await AuthService.signOut();
-    setSupabaseUser(null);
+    clearSupabaseUserState();
     setCurrentView('chat');
-    setActiveConversationId(null);
-    setActiveCall(null);
   };
 
   const supabaseResetPassword = async (email: string) => {
