@@ -1,0 +1,31 @@
+name: PrivateCircle security checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - security/harden-auth-rls-storage
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run TypeScript and production build
+        run: npm run build
+      - name: Run unit tests
+        run: npm test
+      - name: Audit dependency vulnerabilities
+        run: npm audit --audit-level=high
