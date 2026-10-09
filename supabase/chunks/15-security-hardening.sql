@@ -30,9 +30,9 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.profiles) THEN
     RAISE EXCEPTION 'Bootstrap is only available before the first profile exists';
   END IF;
-  token := encode(gen_random_bytes(32), 'hex');
+  token := encode(extensions.gen_random_bytes(32), 'hex');
   INSERT INTO private.admin_bootstrap_tokens(token_hash, email)
-  VALUES (encode(digest(token, 'sha256'), 'hex'), lower(btrim(p_email)));
+  VALUES (encode(extensions.digest(token, 'sha256'), 'hex'), lower(btrim(p_email)));
   RETURN token;
 END;
 $$;
@@ -46,8 +46,8 @@ RETURNS boolean
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
+SET search_path = ''
+AS $
   SELECT EXISTS (
     SELECT 1 FROM public.profiles p
     WHERE p.id = (SELECT auth.uid())
@@ -102,7 +102,7 @@ WHERE p.id = (SELECT auth.uid())
      coalesce((p.location_settings->>'enabled')::boolean, false) = true
      AND (
        (
-         p.location_settings->>'audience' = 'partner'
+         p.location_settings->>'audience' IN ('partner', 'partner_and_admin')
          AND EXISTS (
            SELECT 1 FROM public.profiles me
            WHERE me.id = (SELECT auth.uid())
@@ -131,7 +131,7 @@ RETURNS boolean
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
-SET search_path = public, private, pg_temp
+SET search_path = ''
 AS $$
 DECLARE
   clean_code text := upper(btrim(coalesce(p_code, '')));
@@ -144,7 +144,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.profiles) THEN
     RETURN EXISTS (
       SELECT 1 FROM private.admin_bootstrap_tokens t
-      WHERE t.token_hash = encode(digest(clean_code, 'sha256'), 'hex')
+      WHERE t.token_hash = encode(extensions.digest(clean_code, 'sha256'), 'hex')
         AND t.email = clean_email
         AND t.used_at IS NULL
     );
@@ -212,7 +212,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.profiles) THEN
     UPDATE private.admin_bootstrap_tokens t
     SET used_at = now()
-    WHERE t.token_hash = encode(digest(invite_code, 'sha256'), 'hex')
+    WHERE t.token_hash = encode(extensions.digest(invite_code, 'sha256'), 'hex')
       AND t.email = lower(btrim(coalesce(new.email, '')))
       AND t.used_at IS NULL
     RETURNING t.token_hash INTO claimed_bootstrap;
