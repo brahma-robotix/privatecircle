@@ -250,10 +250,44 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
--- 7) Prevent joining arbitrary conversations by guessing their IDs.
+-- 7) Use a database-owned flag for the canonical circle group. A name is not
+-- an authorization boundary because users can create groups with arbitrary names.
+ALTER TABLE public.conversations
+  ADD COLUMN IF NOT EXISTS is_circle boolean NOT NULL DEFAULT false;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_single_privatecircle_group
+ON public.conversations (is_circle)
+WHERE is_circle = true;
+
+UPDATE public.conversations
+SET is_circle = true
+WHERE id = (
+  SELECT c.id FROM public.conversations c
+  WHERE c.type = 'group' AND c.name = 'Our Inner Circle'
+  ORDER BY c.created_at
+  LIMIT 1
+)
+AND NOT EXISTS (SELECT 1 FROM public.conversations WHERE is_circle = true);
+
+DROP POLICY IF EXISTS "Users can create conversations" ON public.conversations;
+CREATE POLICY "Users can create ordinary conversations"
+ON public.conversations FOR INSERT TO authenticated
+WITH CHECK (
+  created_by = (SELECT auth.uid())
+  AND is_circle = false
+);
+CREATE POLICY "Admins can create circle conversations"
+ON public.conversations FOR INSERT TO authenticated
+WITH CHECK (
+  created_by = (SELECT auth.uid())
+  AND is_circle = true
+  AND public.is_admin()
+);
+
 DROP POLICY IF EXISTS "Users can join or be added to conversations" ON public.conversation_participants;
 DROP POLICY IF EXISTS "Users can join circle group or be added by owner" ON public.conversation_participants;
-CREATE POLICY "Admins or conversation creators can add participants"
+DROP POLICY IF EXISTS "Admins or conversation creators can add participants" ON public.conversation_participants;
+CREATE POLICY "Authorized circle membership"
 ON public.conversation_participants FOR INSERT TO authenticated
 WITH CHECK (
   public.is_admin()
@@ -262,18 +296,36 @@ WITH CHECK (
     WHERE c.id = conversation_id
       AND c.created_by = (SELECT auth.uid())
   )
+  OR (
+    user_id = (SELECT auth.uid())
+    AND EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = (SELECT auth.uid()) AND p.status = 'active'
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.conversations c
+      WHERE c.id = conversation_id AND c.is_circle = true AND c.type = 'group'
+    )
+  )
 );
 
 -- 8) Keep the attachment bucket private and restrict object reads to participants.
-UPDATE storage.buckets
-SET public = false,
-    file_size_limit = 52428800,
-    allowed_mime_types = ARRAY[
-      'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-      'video/mp4', 'video/webm', 'video/quicktime',
-      'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/ogg'
-    ]
-WHERE id = 'attachments';
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'attachments',
+  'attachments',
+  false,
+  52428800,
+  ARRAY[
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'video/mp4', 'video/webm', 'video/quicktime',
+    'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/ogg'
+  ]
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = false,
+  file_size_limit = 52428800,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
 
 DROP POLICY IF EXISTS "Authenticated users can view attachments" ON storage.objects;
 DROP POLICY IF EXISTS "Authenticated users can upload attachments to their own folder" ON storage.objects;
