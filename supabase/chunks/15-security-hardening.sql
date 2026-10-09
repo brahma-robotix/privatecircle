@@ -82,6 +82,22 @@ ON TABLE public.profiles FROM authenticated;
 GRANT UPDATE (name, avatar_bg, bio, relationship_start_date, location_settings, privacy_settings)
 ON TABLE public.profiles TO authenticated;
 
+-- Shared active-account predicate used by RLS policies and privacy-safe views.
+CREATE OR REPLACE FUNCTION public.is_active_user()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles p
+    WHERE p.id = (SELECT auth.uid()) AND p.status = 'active'
+  );
+$;
+REVOKE ALL ON FUNCTION public.is_active_user() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_active_user() TO authenticated;
+
 CREATE OR REPLACE VIEW public.circle_directory
 WITH (security_barrier = true)
 AS
