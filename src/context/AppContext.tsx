@@ -124,6 +124,9 @@ export interface AppState {
   toggleCallVideo: () => void;
   toggleCallScreenShare: () => void;
 
+  // Refresh the safe directory and only consent-authorized location data.
+  refreshCircleDirectory: () => Promise<void>;
+
   // Location & Privacy
   updateLocationSettings: (settings: Partial<UserLocationSettings>) => void;
   stopLocationSharing: () => void;
@@ -192,57 +195,63 @@ const STORAGE_KEY = 'privatecircle_prototype_v3';
 const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const saved = StorageService.load<any>(STORAGE_KEY, null);
+  const isTestEnv = import.meta.env.MODE === 'test';
+  // Production must fail closed instead of silently falling back to demo accounts.
+  const useSupabaseState = !isTestEnv && (isSupabaseConfigured() || import.meta.env.PROD);
+  // Never hydrate production Supabase sessions from cached demo/private state.
+  const saved = useSupabaseState ? null : StorageService.load<any>(STORAGE_KEY, null);
 
-  const [users, setUsers] = useState<User[]>(saved?.users || INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>(useSupabaseState ? [] : (saved?.users || INITIAL_USERS));
   const [conversations, setConversations] = useState<Conversation[]>(
-    saved?.conversations || INITIAL_CONVERSATIONS
+    useSupabaseState ? [] : (saved?.conversations || INITIAL_CONVERSATIONS)
   );
   const [messages, setMessages] = useState<Record<string, Message[]>>(
-    saved?.messages || INITIAL_MESSAGES
+    useSupabaseState ? {} : (saved?.messages || INITIAL_MESSAGES)
   );
   const [invitations, setInvitations] = useState<Invitation[]>(
-    saved?.invitations || INITIAL_INVITATIONS
+    useSupabaseState ? [] : (saved?.invitations || INITIAL_INVITATIONS)
   );
   const [locationAuditLog, setLocationAuditLog] = useState<LocationAuditRecord[]>(
-    saved?.locationAuditLog || INITIAL_LOCATION_AUDIT_LOG
+    useSupabaseState ? [] : (saved?.locationAuditLog || INITIAL_LOCATION_AUDIT_LOG)
   );
   const [milestones, setMilestones] = useState<RelationshipMilestone[]>(
-    saved?.milestones || INITIAL_MILESTONES
+    useSupabaseState ? [] : (saved?.milestones || INITIAL_MILESTONES)
   );
   const [loveNotes, setLoveNotes] = useState<LoveNote[]>(
-    saved?.loveNotes || INITIAL_LOVE_NOTES
+    useSupabaseState ? [] : (saved?.loveNotes || INITIAL_LOVE_NOTES)
   );
   const [memories, setMemories] = useState<MemoryItem[]>(
-    saved?.memories || INITIAL_MEMORIES
+    useSupabaseState ? [] : (saved?.memories || INITIAL_MEMORIES)
   );
   const [callLogs, setCallLogs] = useState<CallLogRecord[]>(
-    saved?.callLogs || INITIAL_CALL_LOGS
+    useSupabaseState ? [] : (saved?.callLogs || INITIAL_CALL_LOGS)
   );
   const [notifications, setNotifications] = useState<AppNotification[]>(
-    saved?.notifications || INITIAL_NOTIFICATIONS
+    useSupabaseState ? [] : (saved?.notifications || INITIAL_NOTIFICATIONS)
   );
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>(
-    saved?.calendarEvents || INITIAL_CALENDAR_EVENTS
+    useSupabaseState ? [] : (saved?.calendarEvents || INITIAL_CALENDAR_EVENTS)
   );
   const [deviceSessions, setDeviceSessions] = useState<UserDeviceSession[]>(
-    saved?.deviceSessions || INITIAL_DEVICE_SESSIONS
+    useSupabaseState ? [] : (saved?.deviceSessions || INITIAL_DEVICE_SESSIONS)
   );
-
-  const isTestEnv = import.meta.env.MODE === 'test';
 
   // Supabase Auth State
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(!isTestEnv);
-  const [authMode, setAuthMode] = useState<'supabase' | 'mock'>(() =>
-    saved?.authMode || (isTestEnv ? 'mock' : (isSupabaseConfigured() ? 'supabase' : 'mock'))
+  const [authMode, setAuthModeState] = useState<'supabase' | 'mock'>(() =>
+    useSupabaseState ? 'supabase' : (saved?.authMode || 'mock')
   );
+  const setAuthMode = (mode: 'supabase' | 'mock') => {
+    if (mode === 'mock' && useSupabaseState) return;
+    setAuthModeState(mode);
+  };
   const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(
-    saved?.currentUserId || 'user-admin'
+    useSupabaseState ? null : (saved?.currentUserId || 'user-admin')
   );
   const [activeConversationId, setActiveConversationId] = useState<string | null>(
-    INITIAL_CONVERSATIONS[1]?.id || INITIAL_CONVERSATIONS[0].id // default to Maya chat
+    useSupabaseState ? null : (INITIAL_CONVERSATIONS[1]?.id || INITIAL_CONVERSATIONS[0].id)
   );
   const [currentView, setCurrentView] = useState<ViewType>(() => {
     if (typeof window !== 'undefined' && window.location.search) {
@@ -267,6 +276,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     : (users.find((u) => u.id === currentUserId) || null);
   const unreadNotificationsCount = notifications.filter((n) => !n.isRead).length;
 
+  const clearSupabaseUserState = () => {
+    setSupabaseUser(null);
+    setUsers([]);
+    setConversations([]);
+    setMessages({});
+    setInvitations([]);
+    setLocationAuditLog([]);
+    setMilestones([]);
+    setLoveNotes([]);
+    setMemories([]);
+    setCallLogs([]);
+    setNotifications([]);
+    setCalendarEvents([]);
+    setDeviceSessions([]);
+    setActiveConversationId(null);
+    setActiveCall(null);
+    setReplyingToMessage(null);
+  };
+
+  const refreshCircleDirectory = async (): Promise<void> => {
+    const supabase = getSupabaseClient();
+    if (!isSupabaseConfigured() || !supabase) return;
+
+    try {
+      const [{ data: directory, error }, { data: sharedLocations }] = await Promise.all([
+        supabase
+          .from('circle_directory')
+          .select('id, name, avatar_bg, bio, created_at')
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('shared_locations')
+          .select('id, location_settings'),
+      ]);
+
+      if (error) {
+        console.warn('[AppContext] Could not refresh safe circle directory:', error.message);
+        return;
+      }
+
+      const sharedLocationById = new Map(
+        (sharedLocations || []).map((row) => [row.id, row.location_settings])
+      );
+      const safeUsers = (directory || []).map((row) => mapProfileToUser({
+        ...row,
+        email: '',
+        role: 'member',
+        status: 'active',
+        location_settings: sharedLocationById.get(row.id) || {
+          enabled: false,
+          audience: 'off',
+          duration: 'always',
+        },
+      }));
+      setUsers(safeUsers);
+    } catch (err) {
+      console.warn('[AppContext] Circle directory refresh failed:', err);
+    }
+  };
+
   // Bootstrap Supabase Session on App Mount
   useEffect(() => {
     let isMounted = true;
@@ -281,24 +349,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const { session } = await AuthService.getSession();
           if (session?.user && isMounted) {
             const profile = await AuthService.fetchProfile(session.user.id);
-            if (profile && profile.status === 'suspended') {
+            if (!profile || profile.status !== 'active') {
               await AuthService.signOut();
-              if (isMounted) setSupabaseUser(null);
-            } else {
-              const mapped = profile
-                ? mapProfileToUser(profile)
-                : {
-                    id: session.user.id,
-                    email: session.user.email || '',
-                    name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Circle Member',
-                    role: 'member' as const,
-                    status: 'active' as const,
-                    avatarBg: '#6366f1',
-                  };
-              if (isMounted) {
-                setSupabaseUser(mapped);
-                setAuthMode('supabase');
-              }
+              if (isMounted) clearSupabaseUserState();
+            } else if (isMounted) {
+              setSupabaseUser(mapProfileToUser(profile));
+              setAuthMode('supabase');
+              void refreshCircleDirectory();
             }
           }
         } catch (err) {
@@ -315,24 +372,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const sub = AuthService.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT' || !session?.user) {
-        if (isMounted) {
-          setSupabaseUser(null);
-        }
+        if (isMounted) clearSupabaseUserState();
       } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
         if (isMounted && session.user) {
           const profile = await AuthService.fetchProfile(session.user.id);
-          const mapped = profile
-            ? mapProfileToUser(profile)
-            : {
-                id: session.user.id,
-                email: session.user.email || '',
-                name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Circle Member',
-                role: 'member' as const,
-                status: 'active' as const,
-                avatarBg: '#6366f1',
-              };
-          setSupabaseUser(mapped);
+          if (!profile || profile.status !== 'active') {
+            await AuthService.signOut();
+            if (isMounted) clearSupabaseUserState();
+            return;
+          }
+          if (event === 'SIGNED_IN') clearSupabaseUserState();
+          setSupabaseUser(mapProfileToUser(profile));
           setAuthMode('supabase');
+          if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+            void refreshCircleDirectory();
+          }
         }
       }
     });
@@ -343,8 +397,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Persist state
+  // Persist demo state only. Real Supabase conversations and private data stay out of localStorage.
   useEffect(() => {
+    if (useSupabaseState) {
+      StorageService.remove(STORAGE_KEY);
+      return;
+    }
     StorageService.save(STORAGE_KEY, {
       users,
       conversations,
@@ -398,9 +456,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const supabaseSignIn = async (email: string, password: string) => {
     const res = await AuthService.signIn(email, password);
     if (!res.error && res.user) {
+      clearSupabaseUserState();
       setSupabaseUser(res.user);
       setAuthMode('supabase');
       setCurrentView('chat');
+      void refreshCircleDirectory();
     }
     return { error: res.error };
   };
@@ -413,9 +473,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     const res = await AuthService.signUp(email, password, name, inviteCode);
     if (!res.error && res.user && res.session) {
+      clearSupabaseUserState();
       setSupabaseUser(res.user);
       setAuthMode('supabase');
       setCurrentView('chat');
+      void refreshCircleDirectory();
     }
     return { error: res.error };
   };
@@ -430,10 +492,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const supabaseSignOut = async () => {
     await AuthService.signOut();
-    setSupabaseUser(null);
+    clearSupabaseUserState();
     setCurrentView('chat');
-    setActiveConversationId(null);
-    setActiveCall(null);
   };
 
   const supabaseResetPassword = async (email: string) => {
@@ -583,6 +643,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const login = (userId: string) => {
+    if (useSupabaseState) return;
     setAuthMode('mock');
     setCurrentUserId(userId);
     setCurrentView('chat');
@@ -1318,6 +1379,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetToMockData = () => {
+    if (useSupabaseState) return;
     StorageService.remove(STORAGE_KEY);
     setUsers(INITIAL_USERS);
     setConversations(INITIAL_CONVERSATIONS);
@@ -1343,6 +1405,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         currentUser,
         users,
+        refreshCircleDirectory,
         conversations,
         messages,
         invitations,

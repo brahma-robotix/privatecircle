@@ -18,16 +18,32 @@ export const AdminService = {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: true });
+      const [{ data, error }, { data: sharedLocations }] = await Promise.all([
+        supabase
+          .from('admin_directory')
+          .select('*')
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('shared_locations')
+          .select('id, location_settings'),
+      ]);
 
       if (error) {
         return { users: [], error: error.message };
       }
 
-      const users: User[] = (data || []).map((row) => mapProfileToUser(row));
+      const sharedLocationById = new Map(
+        (sharedLocations || []).map((row) => [row.id, row.location_settings])
+      );
+      const users: User[] = (data || []).map((row) => mapProfileToUser({
+        ...row,
+        // Only attach location data returned by the consent-filtered view.
+        location_settings: sharedLocationById.get(row.id) || {
+          enabled: false,
+          audience: 'off',
+          duration: 'always',
+        },
+      }));
       return { users, error: null };
     } catch (err: any) {
       return { users: [], error: err.message || 'Failed to fetch circle members' };
@@ -87,10 +103,10 @@ export const AdminService = {
       return { invitation: null, error: 'Email is required' };
     }
 
-    // Generate readable, secure code: PRIV-XXXX-EML
-    const randPart = Math.floor(1000 + Math.random() * 9000);
-    const emailPrefix = cleanEmail.split('@')[0].slice(0, 3).toUpperCase() || 'USR';
-    const code = `PRIV-${randPart}-${emailPrefix}`;
+    // Use cryptographically secure randomness for invitation codes.
+    const randomBytes = new Uint8Array(16);
+    crypto.getRandomValues(randomBytes);
+    const code = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
 
     const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString();
 
@@ -193,10 +209,21 @@ export const AdminService = {
     }
 
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ status: newStatus })
-        .eq('id', userId);
+      const { data: profile, error: fetchError } = await supabase
+        .from('admin_directory')
+        .select('role')
+        .eq('id', userId)
+        .single();
+
+      if (fetchError || !profile) {
+        return { success: false, error: fetchError?.message || 'Profile not found' };
+      }
+
+      const { error } = await supabase.rpc('admin_update_profile_access', {
+        target_user_id: userId,
+        new_role: profile.role,
+        new_status: newStatus,
+      });
 
       if (error) {
         return { success: false, error: error.message };
@@ -221,10 +248,21 @@ export const AdminService = {
     }
 
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ role: newRole })
-        .eq('id', userId);
+      const { data: profile, error: fetchError } = await supabase
+        .from('admin_directory')
+        .select('status')
+        .eq('id', userId)
+        .single();
+
+      if (fetchError || !profile) {
+        return { success: false, error: fetchError?.message || 'Profile not found' };
+      }
+
+      const { error } = await supabase.rpc('admin_update_profile_access', {
+        target_user_id: userId,
+        new_role: newRole,
+        new_status: profile.status,
+      });
 
       if (error) {
         return { success: false, error: error.message };

@@ -32,7 +32,7 @@ describe('AdminService', () => {
     expect(createRes.invitation).toBeNull();
   });
 
-  it('formats invitation code with PRIV- prefix and uppercase characters', async () => {
+  it('returns a cryptographically strong uppercase hexadecimal invitation code', async () => {
     const mockInsert = vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         single: vi.fn().mockResolvedValue({
@@ -40,7 +40,7 @@ describe('AdminService', () => {
             id: 'inv-real-1',
             email: 'partner@example.com',
             invited_by: 'admin-123',
-            code: 'PRIV-1234-PAR',
+            code: 'A1B2C3D4E5F60718293A4B5C6D7E8F90',
             status: 'pending',
             created_at: '2026-09-13T10:00:00Z',
             expires_at: '2026-09-15T10:00:00Z',
@@ -63,6 +63,6 @@ describe('AdminService', () => {
     expect(res.error).toBeNull();
     expect(res.invitation).toBeDefined();
     expect(res.invitation?.email).toBe('partner@example.com');
-    expect(res.invitation?.code).toContain('PRIV-');
+    expect(res.invitation?.code).toMatch(/^[A-F0-9]{32}$/);
   });
 });

@@ -101,12 +101,12 @@ export const ChatService = {
     if (!isSupabaseConfigured() || !supabase) return;
 
     try {
-      // Check if "Our Inner Circle" already exists
+      // Locate the canonical circle by its database-controlled flag, not its display name.
       const { data: existingGroup } = await supabase
         .from('conversations')
         .select('id')
         .eq('type', 'group')
-        .eq('name', 'Our Inner Circle')
+        .eq('is_circle', true)
         .limit(1)
         .maybeSingle();
 
@@ -118,6 +118,7 @@ export const ChatService = {
           .from('conversations')
           .insert({
             type: 'group',
+            is_circle: true,
             name: 'Our Inner Circle',
             description: 'Private trusted circle chat for updates, photos, and group moments',
             created_by: userId,
@@ -131,19 +132,28 @@ export const ChatService = {
       }
 
       if (groupConvId) {
-        // Add user as participant
-        await supabase
+        // Avoid an upsert that would require broad UPDATE rights on membership rows.
+        const { data: membership } = await supabase
           .from('conversation_participants')
-          .upsert({
-            conversation_id: groupConvId,
-            user_id: userId,
-            role: 'member',
-          }, { onConflict: 'conversation_id,user_id' });
+          .select('user_id')
+          .eq('conversation_id', groupConvId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (!membership) {
+          await supabase
+            .from('conversation_participants')
+            .insert({
+              conversation_id: groupConvId,
+              user_id: userId,
+              role: 'member',
+            });
+        }
       }
 
       // Also fetch other profiles to establish direct conversation with circle partner if available
       const { data: otherProfiles } = await supabase
-        .from('profiles')
+        .from('circle_directory')
         .select('id, name')
         .neq('id', userId)
         .limit(5);

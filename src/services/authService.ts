@@ -6,7 +6,6 @@ export type AuthOAuthProvider = 'google' | 'facebook';
 
 export interface VerifyInvitationResult {
   valid: boolean;
-  isBootstrapAdmin?: boolean;
   invitation?: Record<string, any>;
   error: string | null;
 }
@@ -76,97 +75,32 @@ export function formatAuthError(error: any): string {
 
 export const AuthService = {
   /**
-   * Check whether an invitation code is valid, active, not expired, and assigned to the email.
-   * If 0 profiles exist in the database, the initial user is allowed as the founding circle admin.
+   * Verify a single-use, email-bound invitation without exposing the invitation row.
+   * The database trigger atomically consumes the code during account creation.
    */
   async verifyInvitationCode(code: string, email?: string): Promise<VerifyInvitationResult> {
     if (!isSupabaseConfigured() || !supabase) {
-      // In offline/mock mode, allow registration or demo codes
       return { valid: true, error: null };
     }
 
+    const cleanCode = code?.trim().toUpperCase();
+    const cleanEmail = email?.trim().toLowerCase();
+    if (!cleanCode || !cleanEmail) {
+      return { valid: false, error: 'Enter the invitation code and the email address it was issued to.' };
+    }
+
     try {
-      // Check if this is the bootstrap founding admin (0 profiles in DB)
-      const { count, error: countError } = await supabase
-        .from('profiles')
-        .select('id', { count: 'exact', head: true });
-
-      if (!countError && count === 0) {
-        return { valid: true, isBootstrapAdmin: true, error: null };
+      const { data, error } = await supabase.rpc('verify_invitation_code', {
+        p_code: cleanCode,
+        p_email: cleanEmail,
+      });
+      if (error) return { valid: false, error: formatAuthError(error) };
+      if (data !== true) {
+        return { valid: false, error: 'Invalid, expired, already used, or email-mismatched invitation code.' };
       }
-
-      const cleanCode = code?.trim().toUpperCase();
-      if (!cleanCode) {
-        return {
-          valid: false,
-          error: 'PrivateCircle is strictly invite-only. Please provide an invitation code.',
-        };
-      }
-
-      const { data, error } = await supabase
-        .from('invitations')
-        .select('*')
-        .eq('code', cleanCode)
-        .maybeSingle();
-
-      if (error || !data) {
-        return {
-          valid: false,
-          error: 'Invalid invitation code. Please request an invite code from your circle admin.',
-        };
-      }
-
-      if (data.status === 'approved') {
-        return {
-          valid: false,
-          error: 'This invitation code has already been used.',
-        };
-      }
-
-      if (data.status === 'rejected') {
-        return {
-          valid: false,
-          error: 'This invitation code has been revoked by administrators.',
-        };
-      }
-
-      if (data.expires_at && new Date(data.expires_at).getTime() < Date.now()) {
-        return {
-          valid: false,
-          error: 'This invitation code has expired. Please request a new invite code.',
-        };
-      }
-
-      if (email && data.email && data.email.trim().toLowerCase() !== email.trim().toLowerCase()) {
-        return {
-          valid: false,
-          error: `This invitation code was issued for ${data.email}. Please register with that email address.`,
-        };
-      }
-
-      return { valid: true, invitation: data, error: null };
+      return { valid: true, error: null };
     } catch (err: any) {
       return { valid: false, error: formatAuthError(err) };
-    }
-  },
-
-  /**
-   * Mark an invitation as approved after successful registration.
-   */
-  async claimInvitation(code: string, _userId: string): Promise<{ success: boolean; error: string | null }> {
-    if (!isSupabaseConfigured() || !supabase) {
-      return { success: true, error: null };
-    }
-
-    try {
-      const { error } = await supabase
-        .from('invitations')
-        .update({ status: 'approved' })
-        .eq('code', code.trim().toUpperCase());
-
-      return { success: !error, error: error ? formatAuthError(error) : null };
-    } catch (err: any) {
-      return { success: false, error: formatAuthError(err) };
     }
   },
 
@@ -197,6 +131,7 @@ export const AuthService = {
         options: {
           data: {
             name: name.trim() || 'Circle Member',
+            invite_code: inviteCode?.trim().toUpperCase() || '',
           },
         },
       });
@@ -205,28 +140,21 @@ export const AuthService = {
         return { user: null, session: null, error: formatAuthError(error) };
       }
 
-      if (data.user) {
-        // Claim the invitation code if one was used
-        if (inviteCode && !inviteCheck.isBootstrapAdmin) {
-          await this.claimInvitation(inviteCode, data.user.id);
-        }
-
-        // Fetch or create profile
+      if (data.user && data.session) {
+        // The database auth trigger consumes the invitation and creates the profile atomically.
         const profile = await this.fetchProfile(data.user.id);
-        const mappedUser = profile
-          ? mapProfileToUser(profile)
-          : {
-              id: data.user.id,
-              email: data.user.email || email,
-              name: name.trim() || 'Circle Member',
-              role: (inviteCheck.isBootstrapAdmin ? 'admin' : 'member') as UserRole,
-              status: 'active' as const,
-              avatarBg: '#6366f1',
-            };
-
-        return { user: mappedUser, session: data.session, error: null };
+        if (!profile || profile.status !== 'active') {
+          await supabase.auth.signOut();
+          return {
+            user: null,
+            session: null,
+            error: 'PrivateCircle could not verify the new account profile. Contact the administrator.',
+          };
+        }
+        return { user: mapProfileToUser(profile), session: data.session, error: null };
       }
 
+      // Email confirmation may be required before a session/profile can be fetched.
       return { user: null, session: null, error: null };
     } catch (err: any) {
       return { user: null, session: null, error: formatAuthError(err) };
@@ -256,24 +184,19 @@ export const AuthService = {
       }
 
       const profile = await this.fetchProfile(data.user.id);
-      if (profile && profile.status === 'suspended') {
-        // Sign out immediately if account was suspended by admin
+      if (!profile || profile.status !== 'active') {
+        // Fail closed: an auth account without an active database profile is not an app member.
         await supabase.auth.signOut();
-        return { user: null, session: null, error: 'This account is currently suspended by circle administrators.' };
+        return {
+          user: null,
+          session: null,
+          error: profile?.status === 'suspended'
+            ? 'This account is currently suspended by circle administrators.'
+            : 'This account is not an active PrivateCircle member. Ask an administrator for help.',
+        };
       }
 
-      const mappedUser = profile
-        ? mapProfileToUser(profile)
-        : {
-            id: data.user.id,
-            email: data.user.email || email,
-            name: data.user.user_metadata?.name || data.user.email?.split('@')[0] || 'Circle Member',
-            role: 'member' as const,
-            status: 'active' as const,
-            avatarBg: '#6366f1',
-          };
-
-      return { user: mappedUser, session: data.session, error: null };
+      return { user: mapProfileToUser(profile), session: data.session, error: null };
     } catch (err: any) {
       return { user: null, session: null, error: formatAuthError(err) };
     }
