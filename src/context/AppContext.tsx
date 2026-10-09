@@ -193,7 +193,8 @@ const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isTestEnv = import.meta.env.MODE === 'test';
-  const useSupabaseState = isSupabaseConfigured() && !isTestEnv;
+  // Production must fail closed instead of silently falling back to demo accounts.
+  const useSupabaseState = !isTestEnv && (isSupabaseConfigured() || import.meta.env.PROD);
   // Never hydrate production Supabase sessions from cached demo/private state.
   const saved = useSupabaseState ? null : StorageService.load<any>(STORAGE_KEY, null);
 
